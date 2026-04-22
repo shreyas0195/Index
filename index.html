@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Production Logger + GPS</title>
+    <style>
+        :root { --primary: #2563eb; --danger: #ef4444; --bg: #f8fafc; }
+        body { font-family: sans-serif; background: var(--bg); display: flex; flex-direction: column; align-items: center; padding: 20px; margin: 0; }
+        .card, .history-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); width: 340px; margin-bottom: 20px; }
+        h2 { margin-top: 0; text-align: center; color: #1e293b; font-size: 1.1rem; }
+        .group { margin-bottom: 12px; }
+        label { display: block; font-size: 0.75rem; font-weight: bold; color: #475569; margin-bottom: 4px; }
+        input { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box; }
+        .actions { display: flex; gap: 8px; margin-top: 15px; }
+        button { flex: 1; padding: 10px; border-radius: 6px; border: none; font-weight: bold; cursor: pointer; }
+        #submitBtn { background: var(--primary); color: white; }
+        #clearBtn { background: #e2e8f0; color: #475569; }
+        .history-item { font-size: 0.8rem; border-bottom: 1px solid #f1f5f9; padding: 10px 0; display: flex; justify-content: space-between; align-items: center; }
+        .delete-btn { background: var(--danger); color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; cursor: pointer; margin-left: 10px; }
+        #downloadBtn { background: #059669; color: white; margin-top: 15px; width: 100%; }
+        #status { text-align: center; font-size: 0.8rem; min-height: 20px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>Data Entry</h2>
+    <form id="dataForm">
+        <div class="group"><label>Input (Max 20)</label><input type="text" name="Input" maxlength="20" required></div>
+        <div class="group"><label>Output (Max 20)</label><input type="text" name="Output" maxlength="20" required></div>
+        <div class="group"><label>Time</label><input type="time" name="Time" required></div>
+        <div class="group"><label>Quantity</label><input type="number" name="Quantity" min="1" required></div>
+        
+        <!-- Hidden GPS Fields -->
+        <input type="hidden" name="Lat" id="latField">
+        <input type="hidden" name="Long" id="longField">
+
+        <div class="actions">
+            <button type="button" id="clearBtn">Clear</button>
+            <button type="submit" id="submitBtn">Submit</button>
+        </div>
+    </form>
+    <div id="status"></div>
+</div>
+
+<div class="history-card">
+    <h2>Recent Log</h2>
+    <div id="historyList"></div>
+    <button id="downloadBtn">📥 Export CSV</button>
+</div>
+
+<script>
+    // IMPORTANT: Replace this with your Web App URL (ending in /exec), not the spreadsheet link
+    const WEB_APP_URL = 'https://docs.google.com/spreadsheets/d/1HjHNF7dJCxT4oPUe3god0E8fJHr1LMyGORJ0sVFIruM/edit?gid=0#gid=0'; 
+    const form = document.getElementById('dataForm');
+    const historyList = document.getElementById('historyList');
+
+    let logs = JSON.parse(localStorage.getItem('prod_logs')) || [];
+    renderLogs();
+
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const statusMsg = document.getElementById('status');
+        statusMsg.innerText = "📍 Requesting GPS...";
+
+        // Request Geolocation
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    document.getElementById('latField').value = position.coords.latitude;
+                    document.getElementById('longField').value = position.coords.longitude;
+                    sendData();
+                },
+                (error) => {
+                    statusMsg.innerText = "⚠️ GPS Denied. Saving without location...";
+                    sendData(); // Still send data even if GPS is denied
+                }
+            );
+        } else {
+            statusMsg.innerText = "❌ GPS not supported. Saving...";
+            sendData();
+        }
+    });
+
+    function sendData() {
+        const entry = Object.fromEntries(new FormData(form));
+        document.getElementById('status').innerText = "⏳ Saving to Sheet...";
+        
+        fetch(WEB_APP_URL + "?" + new URLSearchParams(entry), { method: "POST", mode: "no-cors" })
+        .then(() => {
+            logs.unshift(entry);
+            if(logs.length > 5) logs.pop();
+            localStorage.setItem('prod_logs', JSON.stringify(logs));
+            renderLogs();
+            form.reset();
+            document.getElementById('status').innerText = "✅ Saved!";
+            setTimeout(() => document.getElementById('status').innerText = "", 3000);
+        })
+        .catch(() => {
+            document.getElementById('status').innerText = "❌ Connection Error";
+        });
+    }
+
+    function deleteLog(index) {
+        if(confirm("Delete this entry from recent history?")) {
+            logs.splice(index, 1);
+            localStorage.setItem('prod_logs', JSON.stringify(logs));
+            renderLogs();
+        }
+    }
+
+    function renderLogs() {
+        historyList.innerHTML = logs.length ? logs.map((log, index) => `
+            <div class="history-item">
+                <div>
+                    <strong>${log.Input}</strong> → ${log.Output}<br>
+                    <small>Qty: ${log.Quantity} | ${log.Time}</small>
+                </div>
+                <button class="delete-btn" onclick="deleteLog(${index})">Delete</button>
+            </div>`).join('') : "<p style='text-align:center;color:#94a3b8'>No entries</p>";
+    }
+
+    document.getElementById('downloadBtn').addEventListener('click', () => {
+        let csv = "data:text/csv;charset=utf-8,Input,Output,Time,Quantity,Lat,Long\n" + 
+            logs.map(l => `${l.Input},${l.Output},${l.Time},${l.Quantity},${l.Lat||''},${l.Long||''}`).join("\n");
+        window.open(encodeURI(csv));
+    });
+
+    document.getElementById('clearBtn').addEventListener('click', () => form.reset());
+</script>
+</body>
+</html>
